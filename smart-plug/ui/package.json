@@ -1,0 +1,17 @@
+{
+  "name": "akilli-priz",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.16.4",
+    "express-basic-auth": "^1.2.0",
+    "moment": "^2.24.0",
+    "mqtt": "^2.18.8",
+    "mysql2": "^1.6.5",
+    "sequelize": "^5.7.4"
+  }
+}
