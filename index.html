@@ -1,0 +1,206 @@
+<html>
+
+<head>
+    <title>Smart Plug</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <style>
+        p {
+            line-height: 8px;
+        }
+    </style>
+</head>
+
+<body class="mt-5">
+
+    <div class="container">
+        <div class="row mb-5">
+            <div class="col-lg-6">
+                <h2>Priz: </h2>
+                <button class="btn btn-success btn-lg" id="btnRelay">Aç</button>
+            </div>
+            <div class="col-lg-6">
+                <h2>Anlık:</h2>
+                <p style="color:red;" id="txtAmpere"></p>
+                <p style="color:blue;" id="txtPower"></p>
+                <p style="color:green;" id="txtCurrent"></p>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-lg-6">
+                <canvas id="month" width="400" height="400"></canvas>
+            </div>
+            <div class="col-lg-6">
+                <canvas id="day" width="400" height="400"></canvas>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.4.0.slim.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.8.0/Chart.min.js"></script>
+    <script src="https://assets.shiftr.io/js/mqtt-2.9.0.js"></script>
+    <script>
+        $(function () {
+            // CK Boğaziçi kdv dahil kwh birim fiyatı
+            const unitPrice = 0.5375075;
+
+            var color = Chart.helpers.color;
+
+            window.chartColors = {
+                red: 'rgb(255, 99, 132)',
+                orange: 'rgb(255, 159, 64)',
+                yellow: 'rgb(255, 205, 86)',
+                green: 'rgb(75, 192, 192)',
+                blue: 'rgb(54, 162, 235)',
+                purple: 'rgb(153, 102, 255)',
+                grey: 'rgb(201, 203, 207)'
+            };
+
+            $relayBtn = $('#btnRelay');
+            $txtAmpere = $('#txtAmpere');
+            $txtPower = $('#txtPower');
+            $txtCurrent = $('#txtCurrent');
+
+            const powerUi = {
+                mqttClient: null,
+                relayStatus: 'on',
+                init: function () {
+                    //burda mqtt brokera bağlanıyoruz
+                    mqttClient = mqtt.connect('mqtt://6233afbe:9c89cbf1c209aab6@broker.shiftr.io', {
+                        clientId: 'ui'
+                    });
+
+                    mqttClient.on('connect', this.mqttOnConnect);
+                    mqttClient.on('message', this.mqttOnMessage);
+
+                    //burda rölenin aç kapat butonuun click eventini dinlemeye başlıyoruz
+                    $relayBtn.on('click', this.relayBtnOnClick);
+
+                    //bu kısımda serverdan api/month ve api/day datalarını çekmeye başlıyoruz
+                    this.fetchData();
+                },
+                mqttOnConnect: function () {
+                    console.log('mqtt client has connected!');
+
+                    //mqtt bağlantı başarılı olursa /power /relay_status topiclerine abone oluyoruz
+                    mqttClient.subscribe('/power');
+                    mqttClient.subscribe('/relay_status');
+                    //nodemcu dan rölenin son durumunu öğrenmek için istek atıyoruz
+                    mqttClient.publish('relay', 'status');
+                },
+                mqttOnMessage: function (topic, message) {
+                    //mqtt den gelen mesajları topiclerine göre işliyoruz.
+                    const data = JSON.parse(message);
+                    if (topic == '/relay_status') {
+                        //relay_status topicinden gelen rölenin durumunu bir değişkene atıyoruz. 
+                        //ve değişikliği butonda göstermek için buttonu değiştirecek metodu çağırıyoruz
+                        relayStatus = data.status;
+                        powerUi.changeRelayButtonLabel();
+                    } else if (topic == '/power') {
+                        //burda /power topciinden her 2 sn de bir gelen datayı anlık olarak ekrana yazıyoruz.
+                        $txtAmpere.html(data.I.toFixed(2) + ' Amper');
+                        $txtPower.html(data.P.toFixed(2) + ' Watt');
+                        $txtCurrent.html(powerUi.getPrice(data.WH) + ' TL');
+                    }
+                },
+                relayBtnOnClick: function (e) {
+                    //butonun click eventi burayı tetikliyo
+                    //rölenin son durumunu alıp yeni status oluşturuyoruz tam tersi olacak şekilde
+                    var status = 'on';
+                    if (relayStatus == 'on') {
+                        status = 'off';
+                    }
+                    //burda publish ediyoruz yeni bilgiyi nodemcu bu topici dinleyerek röleyi açıp kapatacak
+                    mqttClient.publish('relay', status);
+                },
+                changeRelayButtonLabel: function () {
+                    //bu fonksiyon butonu rölenin durumuna göre html de şekilledirip üzerine açık kapalı ve yeşil kırmızı renkleri ayarlıyor
+                    var text = 'Kapat';
+                    var btnClass = 'btn-danger';
+                    if (relayStatus == 'on') {
+                        var text = 'Aç';
+                        btnClass = 'btn-success';
+                    }
+                    var currentBtnClass = btnClass == 'btn-success' ? 'btn-danger' : 'btn-success';
+
+                    $relayBtn.removeClass(currentBtnClass).addClass(btnClass);
+                    $relayBtn.html(text);
+                },
+                fetchData: function () {
+                    //fetch data initte çağırılan fonkisyon fetch isteği yaparak serverdan
+                    //aylık ve günlük datayı alıp chartları oluşturuyor
+                    fetch('/api/month')
+                        .then((resp) => { return resp.json(); })
+                        .then((data) => this.createChart('month', data));
+
+                    fetch('/api/day')
+                        .then((resp) => { return resp.json(); })
+                        .then((data) => this.createChart('day', data));
+                },
+                getPrice: function (wh) {
+                    //bu fonksiyon birim fiyat kwh cinsinden olduğu için birim fiyatı 1000 e bölerek wh'e çeviriyor.
+                    return (wh / 1000 * unitPrice).toFixed(5);
+                },
+                getWhSum: function (total, num) {
+                    return total + num;
+                },
+                createChart: function (id, data) {
+                    //burası chart.js kütüphanesini kullarak html5 standartlarında chartlar oluştuuroyor.
+                    //gerekli ayarların detayları bu kütüphane için özel ayarlar
+                    //https://www.chartjs.org/docs/latest/ bu sayfadan ne amaçla kullanıldıkalrına bakılabilir.
+                    var ctx = document.getElementById(id).getContext('2d');
+                    var barChartData = {
+                        labels: Object.keys(data.data),
+                        datasets: [{
+                            label: 'Dataset 1',
+                            backgroundColor: color(window.chartColors.red).alpha(0.5).rgbString(),
+                            borderColor: window.chartColors.red,
+                            borderWidth: 1,
+                            data: Object.values(data.data)
+                        }]
+                    };
+
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: barChartData,
+                        options: {
+                            responsive: true,
+                            legend: {
+                                display: false,
+                                position: 'top',
+                            },
+                            tooltips: {
+                                callbacks: {
+                                    label: (tooltipItem) => {
+                                        return [
+                                            `${tooltipItem.yLabel.toFixed(2)} WH`,
+                                            `${this.getPrice(tooltipItem.yLabel)} TL`
+                                        ];
+                                    }
+                                },
+                                position: 'average',
+                                displayColors: false
+                            },
+                            title: {
+                                display: true,
+                                text: data.label + ' (' + this.getPrice(Object.values(data.data).reduce(this.getWhSum)) + ' TL)'
+                            },
+                            scales: {
+                                yAxes: [{
+                                    ticks: {
+                                        beginAtZero: true
+                                    }
+                                }]
+                            }
+                        }
+                    });
+                }
+            };
+
+            powerUi.init();
+        });
+    </script>
+</body>
+
+</html>
